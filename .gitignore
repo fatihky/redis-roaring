@@ -1,0 +1,10 @@
+*.o
+*.a
+*.so
+*.xo
+*.db
+.vscode
+rmutil/test_vector
+/.idea
+/cmake-build-debug
+/CMakeLists.txt
