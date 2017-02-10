@@ -14,6 +14,10 @@
 
 static RedisModuleType *RoaringType;
 
+#define BITMAP_GET_OK 1
+#define BITMAP_GET_ERR 2
+#define BITMAP_GET_EMPTY 3
+
 /**
  * Helper to get or create a bitmap
  *
@@ -34,6 +38,26 @@ roaring_bitmap_t* get_create_bitmap(RedisModuleCtx *ctx, RedisModuleString *key_
     }
 
     return bitmap;
+}
+
+int get_bitmap(roaring_bitmap_t* bitmap, RedisModuleCtx *ctx, RedisModuleString *key_str, int perms) {
+    RedisModuleKey *key = (RedisModuleKey*)RedisModule_OpenKey(ctx, key_str, perms);
+    bitmap = NULL;
+
+    if (RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_EMPTY) {
+        return BITMAP_GET_EMPTY;
+    } else if (RedisModule_ModuleTypeGetType(key) != RoaringType) {
+        RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+        return BITMAP_GET_ERR;
+    } else {
+        bitmap = RedisModule_ModuleTypeGetValue(key);
+        if (bitmap != NULL) {
+            RedisModule_ReplyWithError(ctx, "??");
+            return BITMAP_GET_ERR;
+        } else {
+            return BITMAP_GET_OK;
+        }
+    }
 }
 
 /**
@@ -97,8 +121,6 @@ int cmdRemove(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         }
     }
 
-    RedisModuleKey *key = (RedisModuleKey*)RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE);
-
     roaring_bitmap_t* bitmap = get_create_bitmap(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE);
     if (bitmap == NULL) {
         free(to_remove);
@@ -122,33 +144,56 @@ int cmdRemove(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
  * Returns cardinality of the roaring bitmap
  */
 int cmdCard(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    if (argc != 2) {
+    char* format_err = "Expects format roaring.card included1 [included2 included3 ...] [^ excluded1 [excluded2] ...]";
+
+    if (argc == 1) {
         return RedisModule_WrongArity(ctx);
     }
     RedisModule_AutoMemory(ctx);
 
-    RedisModuleKey *key = (RedisModuleKey*)RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ);
+    RedisModuleString* caret = RedisModule_CreateString(ctx, "^", 1);
+    bool caret_found = false;
 
-    roaring_bitmap_t* bitmap;
+    roaring_bitmap_t* bitmap = roaring_bitmap_create();
 
-    if (RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_EMPTY) {
-        // If there is nothing here, copy what scard does and return 0
-        return RedisModule_ReplyWithLongLong(ctx, 0);
-    } else if (RedisModule_ModuleTypeGetType(key) != RoaringType) {
-        return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
-    } else {
-        bitmap = RedisModule_ModuleTypeGetValue(key);
+    for (int i = 1; i < argc; i++) {
+        if (RedisModule_StringCompare(argv[i], caret) == 0) {
+RedisModule_Log(ctx, "info", "Found a caret");
+            if (caret_found) {
+                RedisModule_ReplyWithError(ctx, format_err);
+                roaring_bitmap_free(bitmap);
+                return REDISMODULE_ERR;
+            } else {
+                caret_found = true;
+                continue;
+            }
+        }
+
+        // Fetch the bitmap under question
+        roaring_bitmap_t* arg_bitmap;
+        RedisModuleKey *key = (RedisModuleKey*)RedisModule_OpenKey(ctx, argv[i], REDISMODULE_READ);
+        if (RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_EMPTY) {
+            // If there is nothing to include or exclude, just continue on
+            continue;
+        } else if (RedisModule_ModuleTypeGetType(key) != RoaringType) {
+            RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+            roaring_bitmap_free(bitmap);
+            return BITMAP_GET_ERR;
+        }
+
+        // otherwise, we have a set probably!
+        arg_bitmap = RedisModule_ModuleTypeGetValue(key);
+        if (!caret_found) {
+            roaring_bitmap_or_inplace(bitmap, arg_bitmap);
+        } else {
+            roaring_bitmap_andnot_inplace(bitmap, arg_bitmap);
+        }
     }
 
     RedisModule_ReplyWithLongLong(ctx, roaring_bitmap_get_cardinality(bitmap));
+    roaring_bitmap_free(bitmap);
 
     return REDISMODULE_OK;
-}
-
-int cmdIncludeExcludeCard(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    // TODO
-    RedisModule_ReplyWithError(ctx, "Not yet implemented");
-    return REDISMODULE_ERR;
 }
 
 void *RoaringRdbLoad(RedisModuleIO *rdb, int encver) {
@@ -196,7 +241,6 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx) {
     RMUtil_RegisterWriteCmd(ctx, "roaring.add", cmdAdd);
     RMUtil_RegisterWriteCmd(ctx, "roaring.remove", cmdRemove);
     RMUtil_RegisterWriteCmd(ctx, "roaring.card", cmdCard);
-    RMUtil_RegisterWriteCmd(ctx, "roaring.inc.ex.card", cmdIncludeExcludeCard);
 
     return REDISMODULE_OK;
 }
