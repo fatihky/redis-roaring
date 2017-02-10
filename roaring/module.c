@@ -26,13 +26,16 @@ int _cmdAddOrRemove(RedisModuleCtx *ctx, RedisModuleString **argv, int argc, boo
     RedisModule_AutoMemory(ctx);
 
     size_t count = (size_t)argc - 2;
-    long long *values = calloc(count, sizeof(long long));
+    uint32_t *values = calloc(count, sizeof(uint32_t));
 
     // make sure that all the non-key args are integers
     for (int i = 0; i < count; i++) {
-        if (RedisModule_StringToLongLong(argv[i + 2], &values[i]) != REDISMODULE_OK) {
+        long long value;
+        if (RedisModule_StringToLongLong(argv[i + 2], &value) != REDISMODULE_OK) {
             RedisModule_ReplyWithError(ctx, "Invalid argument, expects <key> <int>...");
             return REDISMODULE_ERR;
+        } else {
+            values[i] = (uint32_t)value;
         }
     }
 
@@ -53,11 +56,12 @@ int _cmdAddOrRemove(RedisModuleCtx *ctx, RedisModuleString **argv, int argc, boo
         bitmap = RedisModule_ModuleTypeGetValue(key);
     }
 
-    for (int i = 0; i < count; i++) {
-        if (adding) {
-            roaring_bitmap_add(bitmap, (uint32_t)values[i]);
-        } else {
-            roaring_bitmap_remove(bitmap, (uint32_t)values[i]);
+    if (adding) {
+        roaring_bitmap_add_many(bitmap, count, values);
+    } else {
+        // For whatever reason there is an add_many but not a remove_many
+        for (int i = 0; i < count; i++) {
+            roaring_bitmap_remove(bitmap, values[i]);
         }
     }
 
@@ -144,16 +148,29 @@ int cmdCard(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 }
 
 void *RoaringRdbLoad(RedisModuleIO *rdb, int encver) {
-    // TODO
-    return NULL;
+    size_t* size = NULL;
+    char *serialized = RedisModule_LoadStringBuffer(rdb, size);
+    roaring_bitmap_t *bitmap = roaring_bitmap_deserialize(serialized);
+    free(serialized);
+    return bitmap;
 }
 
 void RoaringRdbSave(RedisModuleIO *rdb, void *value) {
-    // TODO
+    roaring_bitmap_t *bitmap = value;
+    size_t size = roaring_bitmap_size_in_bytes(bitmap);
+    char *serialized = malloc(size);
+
+    roaring_bitmap_serialize(bitmap, serialized);
+
+    RedisModule_SaveStringBuffer(rdb, serialized, size);
+
+    free(serialized);
 }
 
 void RoaringAofRewrite(RedisModuleIO *aof, RedisModuleString *key, void *value) {
-    // TODO
+    // TODO - emit commands that will recreate the bitmap from the value to actual redis commands
+    // exmaple: roaring.add keyname 104 174 1295 601828 55105 108417 ...
+    // in batches of maybe 1000?
 }
 
 size_t RoaringMemUsage(const void *value) {
