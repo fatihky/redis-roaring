@@ -1,7 +1,6 @@
 #include "../redismodule.h"
 #include "../rmutil/util.h"
 #include "../rmutil/strings.h"
-#include <strings.h>
 #include "../rmutil/test_util.h"
 #include "./croaring.h"
 
@@ -14,50 +13,59 @@
 
 static RedisModuleType *RoaringType;
 
-#define BITMAP_GET_OK 1
-#define BITMAP_GET_ERR 2
-#define BITMAP_GET_EMPTY 3
-
 /**
- * Helper to get or create a bitmap
+ * Since add and remove are so similar, unify them in this one path.
  *
- * Will reply with an error message and NULL if the key is the wrong type, otherwise creates or retrieves as necessary
+ * If arg `adding` is true, then adds. Otherwise removes.
  */
-roaring_bitmap_t* get_create_bitmap(RedisModuleCtx *ctx, RedisModuleString *key_str, int perms) {
-    roaring_bitmap_t *bitmap = NULL;
+int _cmdAddOrRemove(RedisModuleCtx *ctx, RedisModuleString **argv, int argc, bool adding) {
+    // argv format: [command, firstarg, secondarg, ...]
+    if (argc < 3) {
+        return RedisModule_WrongArity(ctx);
+    }
+    RedisModule_AutoMemory(ctx);
 
-    RedisModuleKey *key = (RedisModuleKey*)RedisModule_OpenKey(ctx, key_str, perms);
+    size_t count = (size_t)argc - 2;
+    long long *values = calloc(count, sizeof(long long));
+
+    // make sure that all the non-key args are integers
+    for (int i = 0; i < count; i++) {
+        if (RedisModule_StringToLongLong(argv[i + 2], &values[i]) != REDISMODULE_OK) {
+            RedisModule_ReplyWithError(ctx, "Invalid argument, expects <key> <int>...");
+            return REDISMODULE_ERR;
+        }
+    }
+
+    roaring_bitmap_t* bitmap = NULL;
+    RedisModuleKey *key = (RedisModuleKey*)RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE);
 
     if (RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_EMPTY) {
+        // If the bitmap doesn't exist, create it and store it's reference
         bitmap = roaring_bitmap_create();
         RedisModule_ModuleTypeSetValue(key, RoaringType, bitmap);
     } else if (RedisModule_ModuleTypeGetType(key) != RoaringType) {
+        // If it's the wrong type, quit out!
         RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+        free(values);
+        return REDISMODULE_ERR;
     } else {
+        // Otherwise we have a valid bitmap key - grab it
         bitmap = RedisModule_ModuleTypeGetValue(key);
     }
 
-    return bitmap;
-}
-
-int get_bitmap(roaring_bitmap_t* bitmap, RedisModuleCtx *ctx, RedisModuleString *key_str, int perms) {
-    RedisModuleKey *key = (RedisModuleKey*)RedisModule_OpenKey(ctx, key_str, perms);
-    bitmap = NULL;
-
-    if (RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_EMPTY) {
-        return BITMAP_GET_EMPTY;
-    } else if (RedisModule_ModuleTypeGetType(key) != RoaringType) {
-        RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
-        return BITMAP_GET_ERR;
-    } else {
-        bitmap = RedisModule_ModuleTypeGetValue(key);
-        if (bitmap != NULL) {
-            RedisModule_ReplyWithError(ctx, "??");
-            return BITMAP_GET_ERR;
+    for (int i = 0; i < count; i++) {
+        if (adding) {
+            roaring_bitmap_add(bitmap, (uint32_t)values[i]);
         } else {
-            return BITMAP_GET_OK;
+            roaring_bitmap_remove(bitmap, (uint32_t)values[i]);
         }
     }
+
+    RedisModule_ReplyWithLongLong(ctx, 1);
+    RedisModule_ReplicateVerbatim(ctx);
+
+    free(values);
+    return REDISMODULE_OK;
 }
 
 /**
@@ -66,38 +74,7 @@ int get_bitmap(roaring_bitmap_t* bitmap, RedisModuleCtx *ctx, RedisModuleString 
  * Adds the series of values to the roaring bitmap defined by <key>
  */
 int cmdAdd(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    // argv format: [command, firstarg, secondarg, ...]
-    if (argc < 3) {
-        return RedisModule_WrongArity(ctx);
-    }
-    RedisModule_AutoMemory(ctx);
-
-    size_t count = (size_t)argc - 2;
-    long long *to_add = calloc(count, sizeof(long long));
-
-    // make sure that all the non-key args are integers
-    for (int i = 0; i < count; i++) {
-        if (RedisModule_StringToLongLong(argv[i + 2], &to_add[i]) != REDISMODULE_OK) {
-            RedisModule_ReplyWithError(ctx, "Invalid argument, expects <key> <int>...");
-            return REDISMODULE_ERR;
-        }
-    }
-
-    roaring_bitmap_t* bitmap = get_create_bitmap(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE);
-    if (bitmap == NULL) {
-        free(to_add);
-        return REDISMODULE_ERR;
-    }
-
-    for (int i = 0; i < count; i++) {
-        roaring_bitmap_add(bitmap, (uint32_t)to_add[i]);
-    }
-
-    RedisModule_ReplyWithLongLong(ctx, 1);
-    RedisModule_ReplicateVerbatim(ctx);
-
-    free(to_add);
-    return REDISMODULE_OK;
+    return _cmdAddOrRemove(ctx, argv, argc, true);
 }
 
 /**
@@ -106,42 +83,13 @@ int cmdAdd(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
  * Removes elements from the bitmap
  */
 int cmdRemove(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    // TODO: Clean this up, is mostly duplicate code from above
-    if (argc < 3) {
-        return RedisModule_WrongArity(ctx);
-    }
-    RedisModule_AutoMemory(ctx);
-
-    size_t count = (size_t)argc - 2;
-    long long *to_remove = calloc(count, sizeof(long long));
-    for (int i = 0; i < count; i++) {
-        if (RedisModule_StringToLongLong(argv[i + 2], &to_remove[i]) != REDISMODULE_OK) {
-            RedisModule_ReplyWithError(ctx, "Invalid argument, expects <key> <int>...");
-            return REDISMODULE_ERR;
-        }
-    }
-
-    roaring_bitmap_t* bitmap = get_create_bitmap(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE);
-    if (bitmap == NULL) {
-        free(to_remove);
-        return REDISMODULE_ERR;
-    }
-
-    for (int i = 0; i < count; i++) {
-        roaring_bitmap_remove(bitmap, (uint32_t)to_remove[i]);
-    }
-
-    RedisModule_ReplyWithLongLong(ctx, 1);
-    RedisModule_ReplicateVerbatim(ctx);
-
-    free(to_remove);
-    return REDISMODULE_OK;
+    return _cmdAddOrRemove(ctx, argv, argc, false);
 }
 
 /**
- * ROARING.CARD <key>
+ * ROARING.CARD <inc1> [<inc2> ...] [! <exc1> [<exc2> ...]]
  *
- * Returns cardinality of the roaring bitmap
+ * Returns cardinality of the roaring bitmaps, excluding each after the bang (!)
  */
 int cmdCard(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     char* format_err = "Expects format roaring.card included1 [included2 included3 ...] [^ excluded1 [excluded2] ...]";
@@ -151,20 +99,19 @@ int cmdCard(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     }
     RedisModule_AutoMemory(ctx);
 
-    RedisModuleString* caret = RedisModule_CreateString(ctx, "^", 1);
-    bool caret_found = false;
+    RedisModuleString* bang = RedisModule_CreateString(ctx, "!", 1);
+    bool bang_found = false;
 
     roaring_bitmap_t* bitmap = roaring_bitmap_create();
 
     for (int i = 1; i < argc; i++) {
-        if (RedisModule_StringCompare(argv[i], caret) == 0) {
-RedisModule_Log(ctx, "info", "Found a caret");
-            if (caret_found) {
+        if (RedisModule_StringCompare(argv[i], bang) == 0) {
+            if (bang_found) {
                 RedisModule_ReplyWithError(ctx, format_err);
                 roaring_bitmap_free(bitmap);
                 return REDISMODULE_ERR;
             } else {
-                caret_found = true;
+                bang_found = true;
                 continue;
             }
         }
@@ -178,12 +125,12 @@ RedisModule_Log(ctx, "info", "Found a caret");
         } else if (RedisModule_ModuleTypeGetType(key) != RoaringType) {
             RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
             roaring_bitmap_free(bitmap);
-            return BITMAP_GET_ERR;
+            return REDISMODULE_ERR;
         }
 
         // otherwise, we have a set probably!
         arg_bitmap = RedisModule_ModuleTypeGetValue(key);
-        if (!caret_found) {
+        if (!bang_found) {
             roaring_bitmap_or_inplace(bitmap, arg_bitmap);
         } else {
             roaring_bitmap_andnot_inplace(bitmap, arg_bitmap);
