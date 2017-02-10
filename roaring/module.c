@@ -43,6 +43,12 @@ int _cmdAddOrRemove(RedisModuleCtx *ctx, RedisModuleString **argv, int argc, boo
     RedisModuleKey *key = (RedisModuleKey*)RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE);
 
     if (RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_EMPTY) {
+        if (!adding) {
+            // empty key and we're removing, just return with no result
+            RedisModule_ReplyWithLongLong(ctx, 1);
+            return REDISMODULE_OK;
+        }
+
         // If the bitmap doesn't exist, create it and store it's reference
         bitmap = roaring_bitmap_create();
         RedisModule_ModuleTypeSetValue(key, RoaringType, bitmap);
@@ -63,6 +69,11 @@ int _cmdAddOrRemove(RedisModuleCtx *ctx, RedisModuleString **argv, int argc, boo
         for (int i = 0; i < count; i++) {
             roaring_bitmap_remove(bitmap, values[i]);
         }
+    }
+
+    // If we've removed and the bitmap is empty, get rid of the key
+    if (!adding && roaring_bitmap_is_empty(bitmap)) {
+        RedisModule_DeleteKey(key);
     }
 
     RedisModule_ReplyWithLongLong(ctx, 1);
@@ -96,7 +107,7 @@ int cmdRemove(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
  * Returns cardinality of the roaring bitmaps, excluding each after the bang (!)
  */
 int cmdCard(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    char* format_err = "Expects format roaring.card included1 [included2 included3 ...] [^ excluded1 [excluded2] ...]";
+    char* format_err = "Expects format roaring.card included1 [included2 included3 ...] [! excluded1 [excluded2] ...]";
 
     if (argc == 1) {
         return RedisModule_WrongArity(ctx);

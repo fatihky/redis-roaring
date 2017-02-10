@@ -8,3 +8,4 @@ rmutil/test_vector
 /.idea
 /cmake-build-debug
 /CMakeLists.txt
+/dump.rdb
