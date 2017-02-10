@@ -147,6 +147,37 @@ int cmdCard(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     return REDISMODULE_OK;
 }
 
+int cmdMembers(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    if (argc != 2) {
+        return RedisModule_WrongArity(ctx);
+    }
+    RedisModule_AutoMemory(ctx);
+
+    // Fetch the bitmap under question
+    roaring_bitmap_t* bitmap;
+    RedisModuleKey *key = (RedisModuleKey*)RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ);
+    if (RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_EMPTY) {
+        // If it's empty, return an empty array
+        return RedisModule_ReplyWithArray(ctx, 0);
+    } else if (RedisModule_ModuleTypeGetType(key) != RoaringType) {
+        RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+        return REDISMODULE_ERR;
+    }
+
+    bitmap = RedisModule_ModuleTypeGetValue(key);
+
+    RedisModule_ReplyWithArray(ctx, roaring_bitmap_get_cardinality(bitmap));
+
+    roaring_uint32_iterator_t* it = roaring_create_iterator(bitmap);
+    while (it->has_value) {
+        RedisModule_ReplyWithLongLong(ctx, it->current_value);
+        roaring_advance_uint32_iterator(it);
+    }
+    roaring_free_uint32_iterator(it);
+
+    return REDISMODULE_OK;
+}
+
 void *RoaringRdbLoad(RedisModuleIO *rdb, int encver) {
     size_t* size = NULL;
     char *serialized = RedisModule_LoadStringBuffer(rdb, size);
@@ -206,6 +237,7 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx) {
     RMUtil_RegisterWriteCmd(ctx, "roaring.add", cmdAdd);
     RMUtil_RegisterWriteCmd(ctx, "roaring.remove", cmdRemove);
     RMUtil_RegisterWriteCmd(ctx, "roaring.card", cmdCard);
+    RMUtil_RegisterWriteCmd(ctx, "roaring.members", cmdMembers);
 
     return REDISMODULE_OK;
 }
