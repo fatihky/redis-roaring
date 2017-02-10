@@ -75,7 +75,7 @@ int _cmdAddOrRemove(RedisModuleCtx *ctx, RedisModuleString **argv, int argc, boo
 /**
  * ROARING.ADD <key> <value> ...
  *
- * Adds the series of values to the roaring bitmap defined by <key>
+ * Adds the series of values to the bitmap
  */
 int cmdAdd(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     return _cmdAddOrRemove(ctx, argv, argc, true);
@@ -147,6 +147,11 @@ int cmdCard(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     return REDISMODULE_OK;
 }
 
+/**
+ * ROARING.MEMBERS <key>
+ *
+ * Returns all members of the bitmap
+ */
 int cmdMembers(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     if (argc != 2) {
         return RedisModule_WrongArity(ctx);
@@ -174,6 +179,38 @@ int cmdMembers(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
         roaring_advance_uint32_iterator(it);
     }
     roaring_free_uint32_iterator(it);
+
+    return REDISMODULE_OK;
+}
+
+/**
+ * ROARING.ISMEMBER <key> <value>
+ *
+ * Checks if the bitmap has the value
+ */
+int cmdIsMember(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    if (argc != 3) {
+        return RedisModule_WrongArity(ctx);
+    }
+    RedisModule_AutoMemory(ctx);
+
+    // Fetch the bitmap under question
+    roaring_bitmap_t* bitmap;
+    RedisModuleKey *key = (RedisModuleKey*)RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ);
+    if (RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_EMPTY) {
+        // If it's empty, return false
+        return RedisModule_ReplyWithLongLong(ctx, 0);
+    } else if (RedisModule_ModuleTypeGetType(key) != RoaringType) {
+        RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+        return REDISMODULE_ERR;
+    }
+
+    bitmap = RedisModule_ModuleTypeGetValue(key);
+
+    long long *value = NULL;
+    RedisModule_StringToLongLong(argv[2], value);
+    bool contains = roaring_bitmap_contains(bitmap, (uint32_t)value);
+    RedisModule_ReplyWithLongLong(ctx, contains);
 
     return REDISMODULE_OK;
 }
@@ -236,8 +273,9 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx) {
     // register commands
     RMUtil_RegisterWriteCmd(ctx, "roaring.add", cmdAdd);
     RMUtil_RegisterWriteCmd(ctx, "roaring.remove", cmdRemove);
-    RMUtil_RegisterWriteCmd(ctx, "roaring.card", cmdCard);
-    RMUtil_RegisterWriteCmd(ctx, "roaring.members", cmdMembers);
+    RMUtil_RegisterReadCmd(ctx, "roaring.card", cmdCard);
+    RMUtil_RegisterReadCmd(ctx, "roaring.members", cmdMembers);
+    RMUtil_RegisterReadCmd(ctx, "roaring.ismember", cmdIsMember);
 
     return REDISMODULE_OK;
 }
