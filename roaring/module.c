@@ -157,12 +157,13 @@ void RoaringAofRewrite(RedisModuleIO *aof, RedisModuleString *key, void *value) 
 }
 
 size_t RoaringMemUsage(const void *value) {
-    // TODO
-    return (size_t)0;
+    roaring_statistics_t stats;
+    roaring_bitmap_statistics(value, &stats);
+    return stats.n_bytes_array_containers + stats.n_bytes_bitset_containers + stats.n_bytes_run_containers;
 }
 
 void RoaringFree(void *value) {
-    // TODO
+   roaring_bitmap_free(value);
 }
 
 int RedisModule_OnLoad(RedisModuleCtx *ctx) {
