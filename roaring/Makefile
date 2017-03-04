@@ -30,7 +30,7 @@ croaring.o:
 	$(CC) -march=native -O3 -std=c11 -shared -o croaring.o -fPIC croaring.c
 
 module.o: croaring.o
-	$(CC) -I$(RM_INCLUDE_DIR) -Wall -g -c -o module.o -fPIC -lc -lm -std=gnu99 -mpopcnt -msse4.2 module.c croaring.o
+	$(CC) -I$(RM_INCLUDE_DIR) -Wall -g -shared -o module.o -fPIC -lc -lm -std=gnu99 -mpopcnt -msse4.2 module.c croaring.o
 
 module.so: module.o
 	$(LD) -o $@ module.o $(SHOBJ_LDFLAGS) $(LIBS) -L$(RMUTIL_LIBDIR) -L. -lrmutil -lc croaring.o
