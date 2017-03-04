@@ -27,10 +27,10 @@ rmutil: FORCE
 	$(MAKE) -C $(RMUTIL_LIBDIR)
 
 croaring.o:
-    $(CC) -march=native -O3 -std=c11 -shared -o croaring.o -fPIC croaring.o
+	$(CC) -march=native -O3 -std=c11 -shared -o croaring.o -fPIC croaring.o
 
 module.o: croaring.o
-    $(CC) -I$(RM_INCLUDE_DIR) -Wall -g -fPIC -lc -lm -std=gnu99 -mpopcnt -msse4.2 -lcroaring
+	$(CC) -I$(RM_INCLUDE_DIR) -Wall -g -fPIC -lc -lm -std=gnu99 -mpopcnt -msse4.2 -lcroaring
 
 module.so: module.o
 	$(LD) -o $@ module.o $(SHOBJ_LDFLAGS) $(LIBS) -L$(RMUTIL_LIBDIR) -L. -lrmutil -lc -lcroaring.o
