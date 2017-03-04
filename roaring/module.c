@@ -218,8 +218,8 @@ int cmdIsMember(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 
     bitmap = RedisModule_ModuleTypeGetValue(key);
 
-    long long *value = NULL;
-    RedisModule_StringToLongLong(argv[2], value);
+    long long value = -1;
+    RedisModule_StringToLongLong(argv[2], &value);
     bool contains = roaring_bitmap_contains(bitmap, (uint32_t)value);
     RedisModule_ReplyWithLongLong(ctx, contains);
 
