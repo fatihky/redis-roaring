@@ -33,7 +33,7 @@ module.o: croaring.o
 	$(CC) -I$(RM_INCLUDE_DIR) -Wall -g -c -o module.o -fPIC -lc -lm -std=gnu99 -mpopcnt -msse4.2 module.c croaring.o
 
 module.so: module.o
-	$(LD) -o $@ module.o $(SHOBJ_LDFLAGS) $(LIBS) -L$(RMUTIL_LIBDIR) -L. -lrmutil -lc -lcroaring.o
+	$(LD) -o $@ module.o $(SHOBJ_LDFLAGS) $(LIBS) -L$(RMUTIL_LIBDIR) -L. -lrmutil -lc croaring.o
 
 clean:
 	rm -rf *.xo *.so *.o
